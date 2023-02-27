@@ -18,5 +18,5 @@ WORKDIR /http_server
 EXPOSE 8080
 
 # Start the server
-CMD ["python3", "http_server_prod.py", "0.0.0.0", "8080", "cert.pem", "key.pem"]
+CMD ["python3", "http_server.py", "0.0.0.0", "8080", "cert.pem", "key.pem"]
 
