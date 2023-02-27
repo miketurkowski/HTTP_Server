@@ -5,7 +5,7 @@ FROM ubuntu:20.04
 RUN apt-get update && apt-get install -y python3 openssl
 
 # Copy the server files to the container
-COPY http_server_prod.py /http_server/
+COPY http_server.py /http_server/
 COPY index.html /http_server/
 COPY test.php /http_server/
 COPY cert.pem /http_server/
