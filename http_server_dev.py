@@ -117,6 +117,14 @@ def handle_php_request(request_file, resource):
     env['QUERY_STRING'] = resource.split('?')[1] if '?' in resource else ''
     env['CONTENT_TYPE'] = 'application/x-www-form-urlencoded'
     env['CONTENT_LENGTH'] = str(len(request_file.split('\r\n')[-1]))
+    env['REDIRECT_STATUS'] = '1' # Set REDIRECT_STATUS variable
+
+    # Set the SCRIPT_FILENAME environment variable to the absolute path of the PHP script
+    script_filename = '/test.php'
+    env['SCRIPT_FILENAME'] = script_filename
+
+    # Log the SCRIPT_FILENAME environment variable
+    logging.info(f'SCRIPT_FILENAME={script_filename}')
 
     # Execute the script using php-cgi
     try:
@@ -131,7 +139,7 @@ def handle_php_request(request_file, resource):
         response = valid_response
         response += f'Content-Length: {len(response_body)}\r\n'
         response += '\r\n'
-        response += response_body
+        response += response_body.decode('utf-8')  # Decode response_body to string
 
     # Return the response and response body
     return response, response_body
