@@ -1,22 +1,29 @@
 FROM ubuntu:20.04
 
-# Update package lists
+# set environment variable to avoid prompts
+ENV DEBIAN_FRONTEND noninteractive
+
+# update package lists
 RUN apt-get update && \
     apt-get upgrade -y && \
-    apt-get install -y python3 python3-pip openssl 
+    apt-get install -y python3 python3-pip openssl php-cgi
 
-# Install required python packages
+# install required python packages
 RUN pip3 install requests pyopenssl
 
-# Copy over files
+# copy over files
 COPY http_server_dev.py /http_server_dev.py
 COPY cert.pem /cert.pem
 COPY key.pem /key.pem
 COPY test.php /test.php
 
-# Expose port 8080
+# add executable permissions to test.php
+RUN chmod +x /test.php
+
+# expose port 8080
 EXPOSE 8080
 
-# Start the server
+# start the server
 CMD ["python3", "/http_server_dev.py", "0.0.0.0", "8080", "/cert.pem", "/key.pem"]
+
 
