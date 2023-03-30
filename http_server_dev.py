@@ -1,4 +1,5 @@
 import logging
+import mimetypes
 import os
 import socket
 import ssl
@@ -50,65 +51,71 @@ def parse_request(request_file):
         return internal_server_error_response
 
 # Define the function to start the server
-def start_server(ip, port, certificate, key):
+def start_server(ip, port, certificate=None, key=None):
+
+    # Set up the logger
+    logging.basicConfig(filename='server.log', level=logging.INFO,
+                        format='%(asctime)s %(message)s', datefmt='%Y-%m-%d, %H:%M:%S')
+    logger = logging.getLogger(__name__)
+
     # Validate command line arguments
-    if not all((ip, port, certificate)):
-        logging.exception('Usage: http_server_prod.py <ip> <port> <certificate> <key>')
+    if not all((ip, port)):
+        logger.exception('Usage: http_server_dev.py <ip> <port> [<certificate> <key>]')
         sys.exit(1)
     if certificate and not key:
-        logging.exception('Error: Certificate is provided but private key is missing')
+        logger.exception('Error: Certificate is provided but private key is missing')
         sys.exit(1)
 
     # Create a socket
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server_socket.bind((ip, port))
-    server_socket.listen(5)
-    logging.info(f'Server listening on {ip}:{port}')
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
+        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server_socket.bind((ip, port))
+        server_socket.listen(5)
+        logger.info(f'Server listening on {ip}:{port}')
 
-    while True:
-        try:
-            # Accept an incoming connection
-            client_socket, address = server_socket.accept()
-            print(f'Accepted connection from {address}')
-
-            # If certificate and key are provided, enable HTTPS
-            if certificate and key:
-                context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-                context.load_cert_chain(certificate, key)
-                try:
-                    client_socket = context.wrap_socket(client_socket, server_side=True)
-                except Exception as e:
-                    logging.exception(f'Error setting up the SSL context: {e}')
-                    client_socket.close()
-                    continue
-        
+        while True:
             try:
-                # Receive data from the client
-                data = client_socket.recv(1024)
+                # Accept an incoming connection
+                client_socket, address = server_socket.accept()
+                logger.info(f'Accepted connection from {address}')
 
-                # Decode the received data and pass it to the handle_request function
-                request = data.decode('utf-8')
-                method, resource, http_version = parse_request(request)
-                response, response_body = handle_request(request, resource)
-  
-                # Send the response back to the client
-                client_socket.sendall(response.encode('utf-8'))
-            
-                # Log the request to a file
-                logging.basicConfig(filename='server.log', level=logging.INFO,
-                                    format='%(asctime)s %(message)s', datefmt='%Y-%m-%d, %H:%M:%S')
-                logging.info(f'{method} {resource} {http_version} -INFO')
+                # If certificate and key are provided, enable HTTPS
+                if certificate and key:
+                    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                    context.load_cert_chain(certificate, key)
+                    try:
+                        with context.wrap_socket(client_socket, server_side=True) as secure_socket:
+                            handle_client_connection(secure_socket, logger)
+                    except Exception as e:
+                        logger.exception(f'Error setting up the SSL context: {e}')
+                        client_socket.close()
+                        continue
+                else:
+                    with client_socket:
+                        handle_client_connection(client_socket, logger)
 
             except Exception as e:
-                logging.exception(f'Error sending response: {e}')
+                logger.exception(f'Error accepting connection: {e}')
+                continue
 
-        except Exception as e:
-            logging.exception(f'Error accepting connection: {e}')
-            continue
+def handle_client_connection(client_socket, logger):
+    try:
+        # Receive data from the client
+        data = client_socket.recv(1024)
 
-        # Close the socket after send the request
-        client_socket.close()
+        # Decode the received data and pass it to the handle_request function
+        request = data.decode('utf-8')
+        method, resource, http_version = parse_request(request)
+        response, response_body = handle_request(request, resource)
+
+        # Send the response back to the client
+        client_socket.sendall(response.encode('utf-8'))
+
+        # Log the request
+        logger.info(f'{method} {resource} {http_version} -INFO')
+
+    except Exception as e:
+        logger.exception(f'Error sending response: {e}')
 
 def handle_php_request(request_file, resource):
     # Build the environment for php-cgi to execute the script
@@ -121,14 +128,14 @@ def handle_php_request(request_file, resource):
 
     # Set the SCRIPT_FILENAME environment variable to the absolute path of the PHP script
     script_filename = '/test.php'
-    env['SCRIPT_FILENAME'] = script_filename
+    env['SCRIPT_FILENAME'] = f'{os.getcwd()}{script_filename}' # Include full path to test.php
 
     # Log the SCRIPT_FILENAME environment variable
-    logging.info(f'SCRIPT_FILENAME={script_filename}')
+    logging.info(f'SCRIPT_FILENAME={env["SCRIPT_FILENAME"]}')
 
     # Execute the script using php-cgi
     try:
-        process = subprocess.Popen(['php-cgi'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=env)
+        process = subprocess.Popen(['/usr/bin/php-cgi'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=env)
         response_body, _ = process.communicate(input=request_file.split('\r\n')[-1].encode('utf-8'))
     except Exception as e:
         logging.exception(f'Error executing the PHP script: {e}')
@@ -157,31 +164,35 @@ def handle_request(request_file, resource):
 
     # Handle PHP requests separately
     elif resource.endswith('.php'):
+        print(f'request_file: {request_file}')
+        print(f'resource: {resource}')
         response, response_body = handle_php_request(request_file, resource)
 
     # Return a valid response for non-PHP requests
     else:
         with open(resource, 'rb') as f:
+            content_type, _ = mimetypes.guess_type(resource)
+            content_type = content_type or 'application/octet-stream'
             response = valid_response
+            response += f'Content-Type: {content_type}\r\n'
             response += f'Content-Length: {os.path.getsize(resource)}\r\n'
             response += '\r\n'
             response_body = f.read()
-            
+
     # Return the response and response body
     return response, response_body
 
-
 # Check if the script is being run as the main program
 if __name__ == '__main__':
-    if len(sys.argv) != 5:
-        print('Usage: http_server_dev.py <ip> <port> <certificate> <key>')
+    if len(sys.argv) < 3:
+        print('Usage: http_server_dev.py <ip> <port> [<certificate> <key>]')
         sys.exit(1)
 
     # Extract the command line arguments and store them in variables
     ip = sys.argv[1]
     port = int(sys.argv[2])
-    certificate = sys.argv[3]
-    key = sys.argv[4]
+    certificate = sys.argv[3] if len(sys.argv) > 3 else None
+    key = sys.argv[4] if len(sys.argv) > 4 else None
 
     # Call the start_server function with the extracted arguments
     start_server(ip, port, certificate, key)
